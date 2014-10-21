@@ -10,24 +10,56 @@ import (
 	"net"
 	"net/http"
 	"net/rpc"
-	//"os"
+	"os"
 	"strconv"
 	"strings"
 	//"time"
 	"crypto/sha1"
 )
 
-func (n Node) create() error {
-	rpc.Register(n)
-	rpc.HandleHTTP()
-	listener, err := net.Listen("tcp", n.address)
-	if err != nil {
-		log.Fatal("Error!", err)
-	}
-	go http.Serve(listener, nil)
+func (n *Node) help(line string) error {
+	log.Print("      The list of commands are:      ")
+	log.Print("  put <key>      , <value>, <address>")
+	log.Print("  putrandom <n>  , get <key>         ")
+	log.Print("  delete <key>   , dump              ")
+	log.Print("	 get <key> 		, <value> <address> ")
 	return nil
 }
-func (n Node) call(address string, method string, request interface{}, reply interface{}) error {
+func (n *Node) dump(_ string) error {
+	log.Printf("Self:       	%s\n", n.address)
+	for q, value := range n.q {
+		log.Printf("Quorum member %d:    %s \n", q, value)
+	}
+	return nil
+}
+func quit(_ string) error {
+	os.Exit(0)
+	return nil
+}
+func (n *Node) create() error {
+	rpc.Register(n)
+	rpc.HandleHTTP()
+	listening := false
+	nextAddress := 0
+	var l net.Listener
+	for !listening {
+		nextAddress += 1
+		listening = true
+		listener, err := net.Listen("tcp", n.address)
+		if err != nil {
+			if nextAddress >= 5 {
+				log.Fatal("Quorum is full")
+			}
+			listening = false
+			n.address = n.q[nextAddress]
+			log.Println("Address is:", n.address)
+		}
+		l = listener
+	}
+	go http.Serve(l, nil)
+	return nil
+}
+func (n *Node) call(address string, method string, request interface{}, reply interface{}) error {
 
 	conn, err := rpc.DialHTTP("tcp", appendLocalHost(address))
 
@@ -49,7 +81,7 @@ func randString(n int) string {
 	}
 	return string(bytes)
 }
-func (n Node) putRandom(line string) error {
+func (n *Node) putRandom(line string) error {
 	//reply := ""
 	list := strings.Fields(line)
 	num, err := strconv.Atoi(list[0])

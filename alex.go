@@ -3,15 +3,14 @@ package main
 import (
 	"bufio"
 	//"crypto/rand"
-	//"flag"
-	//"fmt"
+	"fmt"
 	"log"
 	//"math/big"
 	//"net"
 	//"net/http"
 	//"net/rpc"
 	"os"
-	//"strconv"
+	"strconv"
 	"strings"
 	//"time"
 )
@@ -25,39 +24,28 @@ type Node struct {
 	database map[string]string
 }
 
-func (n Node) help(line string) error {
-	log.Print("      The list of commands are:      ")
-	log.Print("  put <key>      , <value>, <address>")
-	log.Print("  putrandom <n>  , get <key>         ")
-	log.Print("  delete <key>   , dump              ")
-	log.Print("	 get <key> 		, <value> <address> ")
-	return nil
-}
-func (n Node) dump(_ string) error {
-	/*for _, value := range n.q {
-		log.Println(value)
-	}*/
-	log.Println("Quorum is", n.q)
-	return nil
-}
-func quit(_ string) error {
-	os.Exit(0)
+func (n Node) Vote(line string, reply *string) error {
+
 	return nil
 }
 func main() {
 	addrin := os.Args
-
 	var node = &Node{
 		address:  "",
 		q:        make([]string, 5),
 		ledger:   make(map[int]string),
 		database: make(map[string]string),
 	}
-	for i := 0; i < 5; i++ {
-		node.q[i] = appendLocalHost(addrin[i+1])
+	if len(addrin) != 6 {
+		for i := 0; i < 5; i++ {
+			node.q[i] = appendLocalHost(":341" + strconv.Itoa(i))
+		}
+	} else {
+		for i := 0; i < 5; i++ {
+			node.q[i] = appendLocalHost(addrin[i+1])
+		}
 	}
 	node.address = node.q[0]
-	log.Println(node.address)
 	node.create()
 	m := map[string]func(string) error{
 		"help": node.help,
@@ -68,7 +56,9 @@ func main() {
 		"dump": node.dump,
 		"quit": quit,
 	}
-
+	fmt.Println("Paxos Implementation by Alex and Colton")
+	fmt.Println("Listening on:	", node.address)
+	fmt.Println()
 	for {
 		reader := bufio.NewReader(os.Stdin)
 		line, err := reader.ReadString('\n')
