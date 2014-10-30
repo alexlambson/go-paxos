@@ -17,16 +17,83 @@ import (
 
 const SIZE = 100
 
+var CHATTY int = 3
+
+type Seq struct {
+	SeqN    int
+	Address string
+}
+type Proposal struct {
+	Slot int
+	N    Seq
+}
 type Node struct {
 	address  string
 	q        []string //quorum
 	ledger   map[int]string
 	database map[string]string
 }
+type Promise struct {
+}
+type PResponse struct {
+	Okay     bool
+	Promised int
+	Command  string
+}
 
 func (n Node) Vote(line string, reply *string) error {
 
 	return nil
+}
+func (n Node) Prepare(pro Proposal, response *PResponse) error {
+	//sender := pro.N.Address
+	//senderSlot := pro.Slot
+	//senderSeq := pro.N.SeqN
+
+	return nil
+}
+func (n Node) prepareRequest(slot, sequence int) (count int, promise int, command string) {
+	promises := make(chan *PResponse, len(n.q))
+	proposal := Proposal{
+		Slot: slot,
+		N:    Seq{sequence, n.address},
+	}
+	for _, replica := range n.q {
+		log.Printf(replica)
+		go func(address string) {
+			response := new(PResponse)
+			if err := n.call(address, "Node.Prepare", proposal, response); err != nil {
+				chat(2, fmt.Sprintf("Error in calling Prepare on replica %s", address))
+				promises <- nil
+			} else {
+				promises <- response
+				log.Println(response.Command)
+			}
+		}(replica)
+	}
+
+	count = 0
+	promise = 0
+	votedNo := 0
+
+	for _ = range n.q {
+		response := <-promises
+		switch {
+		case response == nil:
+			votedNo++
+			chat(1, "Empty response, counting it as no")
+		case response.Okay:
+			count++
+
+			if response.Promised > 0 {
+				chat(1, fmt.Sprintf("[%d] Propose: --> \"yes\" vote recieved with accepted command={%s}", slot, command))
+			} else {
+				chat(1, fmt.Sprintf("[%d] Propose: --> \"yes\" vote recieved with no command", slot))
+			}
+		}
+	}
+
+	return 1, 1, "temp return"
 }
 func main() {
 	addrin := os.Args
@@ -53,6 +120,7 @@ func main() {
 		//"putrandom": node.putRandom,
 		//"get":    node.getRequest,
 		//"delete": node.deleteRequest,
+		"chat": node.chatLevel,
 		"dump": node.dump,
 		"quit": quit,
 	}
@@ -68,6 +136,8 @@ func main() {
 		}
 		if line == "" {
 			node.help("")
+		} else if line == "test" {
+			node.prepareRequest(1, 2)
 		} else {
 			str := strings.Fields(line)
 			line = strings.Join(str[1:], " ")

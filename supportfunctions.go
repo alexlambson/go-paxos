@@ -4,7 +4,7 @@ import (
 	//"bufio"
 	"crypto/rand"
 	//"flag"
-	//"fmt"
+	"fmt"
 	"log"
 	"math/big"
 	"net"
@@ -59,14 +59,13 @@ func (n *Node) create() error {
 	go http.Serve(l, nil)
 	return nil
 }
-func (n *Node) call(address string, method string, request interface{}, reply interface{}) error {
+func (n Node) call(address string, method string, request interface{}, reply interface{}) error {
 
 	conn, err := rpc.DialHTTP("tcp", appendLocalHost(address))
 
 	if err != nil {
 		return err
 	}
-
 	defer conn.Close()
 	conn.Call(method, request, reply)
 
@@ -141,5 +140,18 @@ func appendLocalHost(s string) string {
 		return s
 	} else {
 		return ""
+	}
+}
+func (n Node) chatLevel(line string) error {
+	CHATTY, _ = strconv.Atoi(line)
+	return nil
+}
+func chat(level int, line string) {
+	if level >= CHATTY {
+		if level == 1 {
+			fmt.Println(line)
+		} else {
+			log.Println(line)
+		}
 	}
 }
