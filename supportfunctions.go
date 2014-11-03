@@ -142,6 +142,18 @@ func appendLocalHost(s string) string {
 		return ""
 	}
 }
+func (n Node) testpa(_ string) error {
+
+	/*for i := 0; i < 10; i++ {
+
+											}*/
+	t := n.assemble()
+	for i := 0; i < len(t); i++ {
+		log.Println(t[i])
+	}
+
+	return nil
+}
 func (n Node) chatLevel(line string) error {
 	CHATTY, _ = strconv.Atoi(line)
 	return nil
@@ -154,4 +166,33 @@ func chat(level int, line string) {
 			log.Println(line)
 		}
 	}
+}
+func (n Node) assemble() []string {
+	quorum := make([]string, 0, len(n.q))
+
+	for _, address := range n.q {
+		t := false
+		if err := n.call(address, "Node.Ping", "Who cares?", t); err == nil {
+			//log.Println(address)
+			quorum = Extend(quorum, address)
+		}
+	}
+	return quorum
+}
+func (n Node) Ping(_ string, reply *bool) error {
+	*reply = true
+	return nil
+}
+func Extend(slice []string, element string) []string {
+	n := len(slice)
+	if n == cap(slice) {
+		// Slice is full; must grow.
+		// We double its size and add 1, so if the size is zero we still grow.
+		newSlice := make([]string, len(slice), 2*len(slice)+1)
+		copy(newSlice, slice)
+		slice = newSlice
+	}
+	slice = slice[0 : n+1]
+	slice[n] = element
+	return slice
 }

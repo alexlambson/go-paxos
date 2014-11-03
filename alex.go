@@ -20,45 +20,82 @@ const SIZE = 100
 var CHATTY int = 3
 
 type Seq struct {
-	SeqN    int
+	N       int
 	Address string
 }
 type Proposal struct {
-	Slot int
+	Slot Promise
 	N    Seq
+}
+type Command struct {
+	SeqN Seq
+	Slot Promise
+	Id   int
 }
 type Node struct {
 	address  string
 	q        []string //quorum
-	ledger   map[int]string
+	promised map[string]Promise
+	lastSeq  int
 	database map[string]string
-}
-type Promise struct {
 }
 type PResponse struct {
 	Okay     bool
-	Promised int
-	Command  string
+	Promised Promise
+}
+type Promise struct {
+	Type     string
+	Key      string
+	Value    string
+	Sequence Seq
 }
 
 func (n Node) Vote(line string, reply *string) error {
 
 	return nil
 }
-func (n Node) Prepare(pro Proposal, response *PResponse) error {
-	//sender := pro.N.Address
-	//senderSlot := pro.Slot
-	//senderSeq := pro.N.SeqN
+func (n Node) Accept(in Command, reply *PResponse) error {
+	tempreply := *reply
+	if value, exists := n.promised[in.Slot.Key]; exists {
+		if value.Sequence.N > in.SeqN.N {
+			tempreply.Okay = false
+			tempreply.Promised = value
+		} else {
+			n.promised[in.Slot.Key] = in.Slot
+			tempreply.Okay = true
+			tempreply.Promised = in.Slot
+		}
+	} else {
+		n.promised[in.Slot.Key] = in.Slot
+		tempreply.Okay = true
+		tempreply.Promised = in.Slot
+	}
+	*reply = tempreply
+	return nil
+}
+func (n Node) Prepare(proposal Promise, reply *PResponse) error {
+	tempreply := *reply
+
+	if proposal.Sequence.N > n.lastSeq {
+		n.promised[proposal.Key] = proposal
+		n.lastSeq = proposal.Sequence.N
+		tempreply.Okay = true
+		tempreply.Promised = proposal
+	} else {
+		tempreply.Okay = false
+		tempreply.Promised = n.promised[proposal.Key]
+	}
+	*reply = tempreply
 
 	return nil
 }
 func (n Node) prepareRequest(slot, sequence int) (count int, promise int, command string) {
 	promises := make(chan *PResponse, len(n.q))
 	proposal := Proposal{
-		Slot: slot,
+		Slot: *new(Promise),
 		N:    Seq{sequence, n.address},
 	}
-	for _, replica := range n.q {
+	for _, replica := range n.assemble() {
 		log.Printf(replica)
 		go func(address string) {
 			response := new(PResponse)
@@ -67,7 +104,7 @@ func (n Node) prepareRequest(slot, sequence int) (count int, promise int, comman
 				promises <- nil
 			} else {
 				promises <- response
-				log.Println(response.Command)
+				log.Println(response.Promised)
 			}
 		}(replica)
 	}
@@ -85,11 +122,6 @@ func (n Node) prepareRequest(slot, sequence int) (count int, promise int, comman
 		case response.Okay:
 			count++
 
-			if response.Promised > 0 {
-				chat(1, fmt.Sprintf("[%d] Propose: --> \"yes\" vote recieved with accepted command={%s}", slot, command))
-			} else {
-				chat(1, fmt.Sprintf("[%d] Propose: --> \"yes\" vote recieved with no command", slot))
-			}
 		}
 	}
 
@@ -100,8 +132,9 @@ func main() {
 	var node = &Node{
 		address:  "",
 		q:        make([]string, 5),
-		ledger:   make(map[int]string),
+		promised: make(map[string]Promise),
 		database: make(map[string]string),
+		lastSeq:  0,
 	}
 	if len(addrin) != 6 {
 		for i := 0; i < 5; i++ {
@@ -120,9 +153,10 @@ func main() {
 		//"putrandom": node.putRandom,
 		//"get":    node.getRequest,
 		//"delete": node.deleteRequest,
-		"chat": node.chatLevel,
-		"dump": node.dump,
-		"quit": quit,
+		"chat":   node.chatLevel,
+		"dump":   node.dump,
+		"quit":   quit,
+		"testpa": node.testpa,
 	}
 	fmt.Println("Paxos Implementation by Alex and Colton")
 	fmt.Println("Listening on:	", node.address)
