@@ -23,30 +23,32 @@ type Seq struct {
 	N       int
 	Address string
 }
-type Proposal struct {
-	Slot Promise
-	N    Seq
-}
 type Command struct {
-	SeqN Seq
-	Slot Promise
-	Id   int
+	SeqN  Seq
+	Slot  int
+	Id    int
+	Type  string
+	Key   string
+	Value string
+}
+type Slot struct {
+	Accepted bool
+	Decided  bool
+	N        Seq
+	Data     Command
 }
 type Node struct {
 	address  string
 	q        []string //quorum
-	promised map[string]Promise
-	lastSeq  int
+	slot     map[int]Slot
 	database map[string]string
 }
 type PResponse struct {
 	Okay     bool
-	Promised Promise
+	Promised Command
 }
 type Promise struct {
-	Type     string
-	Key      string
-	Value    string
+	SlotN    int
 	Sequence Seq
 }
 
@@ -54,42 +56,65 @@ func (n Node) Vote(line string, reply *string) error {
 
 	return nil
 }
+
+//This actually needs the command
 func (n Node) Accept(in Command, reply *PResponse) error {
 	tempreply := *reply
-	if value, exists := n.promised[in.Slot.Key]; exists {
-		if value.Sequence.N > in.SeqN.N {
-			tempreply.Okay = false
-			tempreply.Promised = value
-		} else {
-			n.promised[in.Slot.Key] = in.Slot
-			tempreply.Okay = true
-			tempreply.Promised = in.Slot
-		}
-	} else {
-		n.promised[in.Slot.Key] = in.Slot
+	slot := n.getSlot(in.Slot)
+	lastLocalSeq := slot.N.N
+	commandedSeqNum := in.SeqN.N
+	accepted := slot.Accepted
+
+	if accepted && lastLocalSeq == commandedSeqNum {
+		slot.Accepted = true
+		slot.Decided = true
+		slot.N.N = commandedSeqNum
+		slot.N.Address = n.address
+		slot.Data = in
+		n.placeInSlot(slot, commandedSeqNum)
+		//set the return, since it was successful we do not need to
+		//send back the command
 		tempreply.Okay = true
-		tempreply.Promised = in.Slot
+		tempreply.Promised = slot.Data
+	} else {
+		//the value was not placed
+		//inform the sender and return the
+		//command that we have in this slot
+		tempreply.Okay = false
+		tempreply.Promised = slot.Data
 	}
 	*reply = tempreply
 	return nil
 }
+
+//just gathering majority quorum, does not need the data, just a slot and sequence number
 func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 	tempreply := *reply
+	slotToWork := n.getSlot(proposal.SlotN)
+	currentSeq := slotToWork.N.N
+	proposedSeq := proposal.Sequence.N
 
-	if proposal.Sequence.N > n.lastSeq {
-		n.promised[proposal.Key] = proposal
-		n.lastSeq = proposal.Sequence.N
-		tempreply.Okay = true
-		tempreply.Promised = proposal
-	} else {
+	//was this slot decided or did I already promise a higher sequence number?
+	if slotToWork.Decided || (slotToWork.Accepted && currentSeq > proposedSeq) {
 		tempreply.Okay = false
-		tempreply.Promised = n.promised[proposal.Key]
+		tempreply.Promised = slotToWork.Data
+	} else {
+		slotToWork.Accepted = true
+		slotToWork.N.N = proposedSeq
+		//place the new sequence number and
+		//accepted into a slot.
+		n.placeInSlot(slotToWork, proposal.SlotN)
+
+		tempreply.Okay = true
+		tempreply.Promised = slotToWork.Data
 	}
+
 	*reply = tempreply
 
 	return nil
 }
-func (n Node) prepareRequest(slot, sequence int) (count int, promise int, command string) {
+
+/*func (n Node) prepareRequest(slot, sequence int) (count int, promise int, command string) {
 	promises := make(chan *PResponse, len(n.q))
 	proposal := Proposal{
 		Slot: *new(Promise),
@@ -126,15 +151,14 @@ func (n Node) prepareRequest(slot, sequence int) (count int, promise int, comman
 	}
 
 	return 1, 1, "temp return"
-}
+}*/
 func main() {
 	addrin := os.Args
 	var node = &Node{
 		address:  "",
 		q:        make([]string, 5),
-		promised: make(map[string]Promise),
+		slot:     make(map[int]Slot),
 		database: make(map[string]string),
-		lastSeq:  0,
 	}
 	if len(addrin) != 6 {
 		for i := 0; i < 5; i++ {
@@ -171,7 +195,7 @@ func main() {
 		if line == "" {
 			node.help("")
 		} else if line == "test" {
-			node.prepareRequest(1, 2)
+			//node.prepareRequest(1, 2)
 		} else {
 			str := strings.Fields(line)
 			line = strings.Join(str[1:], " ")

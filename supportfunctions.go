@@ -146,7 +146,7 @@ func (n Node) testpa(_ string) error {
 
 	/*for i := 0; i < 10; i++ {
 
-											}*/
+															}*/
 	t := n.assemble()
 	for i := 0; i < len(t); i++ {
 		log.Println(t[i])
@@ -179,9 +179,17 @@ func (n Node) assemble() []string {
 	}
 	return quorum
 }
+func (n Node) getSlot(slotN int) Slot {
+	return n.slot[slotN]
+}
 func (n Node) Ping(_ string, reply *bool) error {
 	*reply = true
 	return nil
+}
+func (n Node) placeInSlot(elt Slot, num int) bool {
+	//num is the index of where to place the slot
+	n.slot[num] = elt
+	return true
 }
 func Extend(slice []string, element string) []string {
 	n := len(slice)
