@@ -63,9 +63,9 @@ func (n Node) Accept(in Command, reply *PResponse) error {
 	slot := n.getSlot(in.Slot)
 	lastLocalSeq := slot.N.N
 	commandedSeqNum := in.SeqN.N
-	accepted := slot.Accepted
+	//accepted := slot.Accepted
 
-	if accepted && lastLocalSeq == commandedSeqNum {
+	if lastLocalSeq <= commandedSeqNum {
 		slot.Accepted = true
 		slot.Decided = true
 		slot.N.N = commandedSeqNum
@@ -95,7 +95,8 @@ func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 	proposedSeq := proposal.Sequence.N
 
 	//was this slot decided or did I already promise a higher sequence number?
-	if slotToWork.Decided || (slotToWork.Accepted && currentSeq > proposedSeq) {
+	// TODO: make a tie breaker
+	if currentSeq > proposedSeq {
 		tempreply.Okay = false
 		tempreply.Promised = slotToWork.Data
 	} else {
