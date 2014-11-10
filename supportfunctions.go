@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 	"math/big"
+	//"math/rand"
+	"errors"
 	"net"
 	"net/http"
 	"net/rpc"
@@ -146,7 +148,7 @@ func (n Node) testpa(_ string) error {
 
 	/*for i := 0; i < 10; i++ {
 
-															}*/
+																																			}*/
 	t := n.assemble()
 	for i := 0; i < len(t); i++ {
 		log.Println(t[i])
@@ -203,4 +205,75 @@ func Extend(slice []string, element string) []string {
 	slice = slice[0 : n+1]
 	slice[n] = element
 	return slice
+}
+func (elt Seq) String() string {
+	return fmt.Sprintf("Seq number %s from ----> %s", elt.N, elt.Address)
+}
+
+//am I greater than the other?
+func (elt Seq) Cmp(other Seq) bool {
+	myNum := elt.N
+	otherNum := other.N
+	myAddress := elt.Address
+	otherAddress := other.Address
+
+	chat(1, fmt.Sprintf("Comparing %s:%s and %s:%s", myNum, myAddress, otherNum, otherAddress))
+	//if seq nums are the same then use the address as a tie breaker.
+	if myNum == otherNum {
+		return myAddress > otherAddress
+	}
+	return myNum > otherNum
+}
+func (elt Node) runCommand(com Command) string {
+
+	commandType := com.Type
+	switch {
+	case commandType == "get":
+		if value, exists := elt.database[com.Key]; exists {
+			return value
+		} else {
+			return fmt.Sprintf("Data for: %s     does not exist\n", com.Key)
+		}
+	case commandType == "put":
+		elt.database[com.Key] = com.Value
+		return fmt.Sprintf("Put  [%s] -------->  [%s]\n", com.Key, com.Value)
+	case commandType == "delete":
+		if value, exists := elt.database[com.Key]; exists {
+			delete(elt.database, com.Key)
+			return fmt.Sprintf("Deleted: [%s] ------> [%s]", com.Key, value)
+		} else {
+			return fmt.Sprintf("Data for: %s     does not exist\n", com.Key)
+		}
+	default:
+		return fmt.Sprintf("Command type   [%s]   not recognized\n", commandType)
+	}
+}
+func parseInput(line string) (returnC Command, err error) {
+	err = nil
+	inputs := strings.Fields(line)
+	cType := inputs[0]
+	id := randString(4)
+
+	returnC.Id = id
+
+	switch {
+	case cType == "get" || cType == "delete":
+		returnC.Type = cType
+		returnC.Key = inputs[1]
+	case cType == "put":
+		returnC.Type = cType
+		returnC.Key = inputs[1]
+		returnC.Value = inputs[2]
+	default:
+		err = errors.New(fmt.Sprintf("Not valid input type --> {%s}", cType))
+	}
+
+	return returnC, err
+}
+func (n Node) parseTest(line string) error {
+	line = "put " + line
+	log.Println(line)
+	nope, err := parseInput(line)
+	log.Println(nope.Type, nope.Value, nope.Id, nope.Key, err)
+	return err
 }

@@ -5,7 +5,7 @@ import (
 	//"crypto/rand"
 	"fmt"
 	"log"
-	//"math/big"
+	//"math"
 	//"net"
 	//"net/http"
 	//"net/rpc"
@@ -26,7 +26,7 @@ type Seq struct {
 type Command struct {
 	SeqN  Seq
 	Slot  int
-	Id    int
+	Id    string
 	Type  string
 	Key   string
 	Value string
@@ -46,6 +46,10 @@ type Node struct {
 type PResponse struct {
 	Okay     bool
 	Promised Command
+}
+type Decision struct {
+	SlotN int
+	Value Command
 }
 type Promise struct {
 	SlotN    int
@@ -91,41 +95,58 @@ func (n Node) Accept(in Command, reply *PResponse) error {
 func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 	tempreply := *reply
 	slotToWork := n.getSlot(proposal.SlotN)
-	currentSeq := slotToWork.N.N
-	proposedSeq := proposal.Sequence.N
+	currentSeq := slotToWork.N
+	proposedSeq := proposal.Sequence
 
 	//was this slot decided or did I already promise a higher sequence number?
-	// TODO: make a tie breaker
-	if currentSeq > proposedSeq {
+	// TODO: make a tie breaker. Checks greater than. If they are equal then use IP as tie-breaker
+	// ^^^^^ finished. see func seq.cmp
+	if currentSeq.Cmp(proposedSeq) {
 		tempreply.Okay = false
 		tempreply.Promised = slotToWork.Data
 	} else {
 		slotToWork.Accepted = true
-		slotToWork.N.N = proposedSeq
+		slotToWork.N.N = proposedSeq.N
 		//place the new sequence number and
 		//accepted into a slot.
 		n.placeInSlot(slotToWork, proposal.SlotN)
 
 		tempreply.Okay = true
-		tempreply.Promised = slotToWork.Data
+		tempreply.Promised = Command{}
 	}
 
 	*reply = tempreply
 
 	return nil
 }
+func (elt Node) Decide(in Decision, reply *bool) error {
 
-/*func (n Node) prepareRequest(slot, sequence int) (count int, promise int, command string) {
+	//place the slot, mark as decided, run the command
+	slotToWork := elt.getSlot(in.SlotN)
+	slotToWork.Accepted = true
+	slotToWork.Decided = true
+	slotToWork.Data = in.Value
+
+	elt.slot[in.SlotN] = slotToWork
+
+	elt.runCommand(slotToWork.Data)
+
+	*reply = true
+
+	return nil
+}
+
+func (n Node) prepareRequest(slotNum, sequence int) (count int, highest int, command Command) {
 	promises := make(chan *PResponse, len(n.q))
-	proposal := Proposal{
-		Slot: *new(Promise),
-		N:    Seq{sequence, n.address},
+	prepareRequest := Promise{
+		SlotN:    slotNum,
+		Sequence: Seq{sequence, n.address},
 	}
 	for _, replica := range n.assemble() {
-		log.Printf(replica)
+		chat(1, replica)
 		go func(address string) {
 			response := new(PResponse)
-			if err := n.call(address, "Node.Prepare", proposal, response); err != nil {
+			if err := n.call(address, "Node.Prepare", prepareRequest, response); err != nil {
 				chat(2, fmt.Sprintf("Error in calling Prepare on replica %s", address))
 				promises <- nil
 			} else {
@@ -136,7 +157,7 @@ func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 	}
 
 	count = 0
-	promise = 0
+	highest = 0
 	votedNo := 0
 
 	for _ = range n.q {
@@ -147,12 +168,32 @@ func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 			chat(1, "Empty response, counting it as no")
 		case response.Okay:
 			count++
+			highest++
+			if response.Promised.SeqN.N > 0 {
+				chat(1, fmt.Sprintf("[%d] ---> \"yes\" on command   {%s}  ", slotNum, command))
+			} else {
+				chat(1, fmt.Sprintf("[%d] ---> \"yes\" no value", slotNum))
+			}
 
+			// see if a response is a higher sequence number and record its value
+			if response.Promised.SeqN.Cmp(command.SeqN) {
+				command = response.Promised
+			}
+			//record the highest sequence number. This is for when we need to execute this again
+			if response.Promised.SeqN.N > highest {
+				highest = response.Promised.SeqN.N
+			}
+		case !response.Okay:
+			votedNo++
+			if response.Promised.SeqN.N > highest {
+				highest = response.Promised.SeqN.N
+			}
 		}
 	}
 
-	return 1, 1, "temp return"
-}*/
+	return count, highest, command
+}
+
 func main() {
 	addrin := os.Args
 	var node = &Node{
@@ -174,7 +215,7 @@ func main() {
 	node.create()
 	m := map[string]func(string) error{
 		"help": node.help,
-		//"put":       node.putRequest,
+		"put":  node.parseTest,
 		//"putrandom": node.putRandom,
 		//"get":    node.getRequest,
 		//"delete": node.deleteRequest,
