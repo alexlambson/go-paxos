@@ -148,7 +148,7 @@ func (n Node) testpa(_ string) error {
 
 	/*for i := 0; i < 10; i++ {
 
-																																			}*/
+																																							}*/
 	t := n.assemble()
 	for i := 0; i < len(t); i++ {
 		log.Println(t[i])
@@ -182,7 +182,11 @@ func (n Node) assemble() []string {
 	return quorum
 }
 func (n Node) getSlot(slotN int) Slot {
-	return n.slot[slotN]
+	if value, okay := n.slot[slotN]; okay {
+		return value
+	} else {
+		return Command{}
+	}
 }
 func (n Node) Ping(_ string, reply *bool) error {
 	*reply = true
@@ -218,11 +222,25 @@ func (elt Seq) Cmp(other Seq) bool {
 	otherAddress := other.Address
 
 	chat(1, fmt.Sprintf("Comparing %s:%s and %s:%s", myNum, myAddress, otherNum, otherAddress))
-	//if seq nums are the same then use the address as a tie breaker.
+
+	//-1 means less than, 0 means equal, 1 means greater than
+
 	if myNum == otherNum {
-		return myAddress > otherAddress
+		if myAddress > otherAddress {
+			return 1
+		}
+		if myAddress < otherAddress {
+			return -1
+		}
+		return 0
 	}
-	return myNum > otherNum
+	if myNum > otherNum {
+		return 1
+	}
+	if myNum < otherNum {
+		return -1
+	}
+	return 0
 }
 func (elt Node) runCommand(com Command) string {
 
@@ -276,4 +294,8 @@ func (n Node) parseTest(line string) error {
 	nope, err := parseInput(line)
 	log.Println(nope.Type, nope.Value, nope.Id, nope.Key, err)
 	return err
+}
+func (elt Command) Equals(other Command) bool {
+	// Do the commands conflict?
+	return elt.SeqN.Address == other.SeqN.Address && elt.Id == other.Id
 }

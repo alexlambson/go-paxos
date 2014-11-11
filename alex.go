@@ -32,10 +32,10 @@ type Command struct {
 	Value string
 }
 type Slot struct {
-	Accepted bool
 	Decided  bool
 	N        Seq
 	Data     Command
+	Position int
 }
 type Node struct {
 	address  string
@@ -45,15 +45,36 @@ type Node struct {
 }
 type PResponse struct {
 	Okay     bool
-	Promised Command
+	Promised Seq
+	Command  Command
 }
 type Decision struct {
-	SlotN int
+	Slot  Slot
 	Value Command
 }
+
+//prepare
 type Promise struct {
 	SlotN    int
 	Sequence Seq
+	Command  Command
+	Message  string
+}
+
+//send and recieve
+type Accept struct {
+	Slot     Slot
+	Sequence Seq
+	Data     Command
+}
+type Request struct {
+	Promise  Promise
+	Accepted Accept
+	Command  Command
+	Accept   Accept
+	Decision Decision
+	Message  string
+	Address  string
 }
 
 func (n Node) Vote(line string, reply *string) error {
@@ -101,18 +122,22 @@ func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 	//was this slot decided or did I already promise a higher sequence number?
 	// TODO: make a tie breaker. Checks greater than. If they are equal then use IP as tie-breaker
 	// ^^^^^ finished. see func seq.cmp
-	if currentSeq.Cmp(proposedSeq) {
+	if currentSeq.Cmp(proposedSeq) > -1 {
 		tempreply.Okay = false
-		tempreply.Promised = slotToWork.Data
+		chat(1, fmt.Sprintf("[%d]   already promised to ----> [%s]", proposal.SlotN, slotToWork.N.Address))
+		tempreply.Promised = proposedSeq
 	} else {
-		slotToWork.Accepted = true
-		slotToWork.N.N = proposedSeq.N
+		//slotToWork.Accepted = true
+		slotToWork.N = proposedSeq
 		//place the new sequence number and
 		//accepted into a slot.
 		n.placeInSlot(slotToWork, proposal.SlotN)
 
 		tempreply.Okay = true
-		tempreply.Promised = Command{}
+		tempreply.Promised = proposedSeq
+		//will be blank if slot did not exist
+		tempreply.Command = slotToWork.Data
+
 	}
 
 	*reply = tempreply
@@ -121,17 +146,56 @@ func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 }
 func (elt Node) Decide(in Decision, reply *bool) error {
 
-	//place the slot, mark as decided, run the command
-	slotToWork := elt.getSlot(in.SlotN)
-	slotToWork.Accepted = true
-	slotToWork.Decided = true
-	slotToWork.Data = in.Value
+	// sleep
+	duration := float64(latency)
+	offset := float64(duration) * rand.Float64()
+	time.Sleep(time.Second * time.Duration(duration+offset))
 
-	elt.slot[in.SlotN] = slotToWork
+	args := req.Decide
+	//logM("")
+	logM("****  Decide:   " + args.Slot.String())
 
-	elt.runCommand(slotToWork.Data)
+	if self.Slots[args.Slot.N].Decided && self.Slots[args.Slot.N].Command.Command != args.Value.Command {
+		logM("****  Decide:  Already decided slot " + strconv.Itoa(args.Slot.N) + " with different command " + args.Value.Command)
+		failure("Decide")
+		return nil
+	}
+	// If already decided, quit
+	if self.Slots[args.Slot.N].Decided {
+		logM("****  Decide:  Already decided slot " + strconv.Itoa(args.Slot.N) + " with command " + args.Value.Command)
+		return nil
+	}
 
-	*reply = true
+	_, ok := self.Acks[args.Value.Key]
+	if ok {
+		// if found send the result across the channel, then remove the channel from the map and throw it away
+		self.Acks[args.Value.Key] <- args.Value.Command
+	}
+
+	command := strings.Split(args.Value.Command, " ")
+	args.Slot.Decided = true
+	self.Slots[args.Slot.N] = args.Slot
+
+	for !allDecided(self.Slots, args.Slot.N) {
+		time.Sleep(time.Second)
+	}
+	switch command[0] {
+	case "put":
+		logM("")
+		logM("COMMAND COMPLETE- Put " + command[1] + " " + command[2])
+		self.Database[command[1]] = command[2]
+		break
+	case "get":
+		logM("")
+		logM("COMMAND COMPLETE- Get ----> Key: " + command[1] + ", Value: " + self.Database[command[1]])
+		break
+	case "delete":
+		logM("")
+		logM("COMMAND COMPLETE- " + command[1] + " deleted.")
+		delete(self.Database, command[1])
+		break
+	}
+	self.Current++
 
 	return nil
 }
