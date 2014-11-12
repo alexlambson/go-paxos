@@ -148,7 +148,7 @@ func (n Node) testpa(_ string) error {
 
 	/*for i := 0; i < 10; i++ {
 
-																																							}*/
+																																														}*/
 	t := n.assemble()
 	for i := 0; i < len(t); i++ {
 		log.Println(t[i])
@@ -215,7 +215,7 @@ func (elt Seq) String() string {
 }
 
 //am I greater than the other?
-func (elt Seq) Cmp(other Seq) bool {
+func (elt Seq) Cmp(other Seq) int {
 	myNum := elt.N
 	otherNum := other.N
 	myAddress := elt.Address
@@ -295,7 +295,35 @@ func (n Node) parseTest(line string) error {
 	log.Println(nope.Type, nope.Value, nope.Id, nope.Key, err)
 	return err
 }
-func (elt Command) Equals(other Command) bool {
+func (elt Command) SameID(other Command) bool {
 	// Do the commands conflict?
 	return elt.SeqN.Address == other.SeqN.Address && elt.Id == other.Id
+}
+func (elt Command) SameCommand(other Command) bool {
+	return elt.Key == other.Key && elt.Type == other.Type && elt.Value == other.Value
+}
+func (elt Command) Print() string {
+	return fmt.Sprintf("[ %s , %s , %s ]", elt.Type, elt.Key, elt.Value)
+}
+func allDecided(slots map[int]Slot, n int) bool {
+	//n is the slot number to stop at
+	if n == 1 {
+		return true
+	}
+	//see if everyone up to this slot is decided
+	for i, value := range slots {
+		//0 is left empty
+		if i == 0 {
+			continue
+		}
+		//we past them all, break and return true
+		if i >= n {
+			break
+		}
+		//someone is not decided
+		if !value.Decided {
+			return false
+		}
+	}
+	return true
 }
