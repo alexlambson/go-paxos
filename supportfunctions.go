@@ -148,7 +148,7 @@ func (n Node) testpa(_ string) error {
 
 	/*for i := 0; i < 10; i++ {
 
-																																														}*/
+																																																}*/
 	t := n.assemble()
 	for i := 0; i < len(t); i++ {
 		log.Println(t[i])
@@ -185,7 +185,7 @@ func (n Node) getSlot(slotN int) Slot {
 	if value, okay := n.slot[slotN]; okay {
 		return value
 	} else {
-		return Command{}
+		return Slot{}
 	}
 }
 func (n Node) Ping(_ string, reply *bool) error {
@@ -326,4 +326,16 @@ func allDecided(slots map[int]Slot, n int) bool {
 		}
 	}
 	return true
+}
+
+//1 = yes, 0 = no majority, -1 = no
+func (elt Node) majority(yes int, no int) int {
+	size := len(elt.q) / 2
+	if yes > size {
+		return 1
+	}
+	if no > size {
+		return -1
+	}
+	return 0
 }

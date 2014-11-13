@@ -58,7 +58,7 @@ type Decision struct {
 
 //prepare
 type Promise struct {
-	SlotN    int
+	Slot     Slot
 	Sequence Seq
 	Command  Command
 	Message  string
@@ -119,7 +119,7 @@ func (n Node) Accept(in Request, reply *PResponse) error {
 //just gathering majority quorum, does not need the data, just a slot and sequence number
 func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 	tempreply := *reply
-	slotToWork := n.getSlot(proposal.SlotN)
+	slotToWork := n.getSlot(proposal.Slot.Position)
 	currentSeq := slotToWork.N
 	proposedSeq := proposal.Sequence
 
@@ -128,14 +128,14 @@ func (n Node) Prepare(proposal Promise, reply *PResponse) error {
 	// ^^^^^ finished. see func seq.cmp
 	if currentSeq.Cmp(proposedSeq) > -1 {
 		tempreply.Okay = false
-		chat(1, fmt.Sprintf("[%d]   already promised to ----> [%s]", proposal.SlotN, slotToWork.N.Address))
+		chat(1, fmt.Sprintf("[%d]   already promised to ----> [%s]", proposal.Slot.Position, slotToWork.N.Address))
 		tempreply.Promised = proposedSeq
 	} else {
 		//slotToWork.Accepted = true
 		slotToWork.N = proposedSeq
 		//place the new sequence number and
 		//accepted into a slot.
-		n.placeInSlot(slotToWork, proposal.SlotN)
+		n.placeInSlot(slotToWork, proposal.Slot.Position)
 
 		tempreply.Okay = true
 		tempreply.Promised = proposedSeq
@@ -184,67 +184,8 @@ func (elt Node) Decide(in Request, reply *bool) error {
 	return nil
 }
 
-/*func (n Node) prepareRequest(slotNum, sequence int) (count int, highest int, command Command) {
-	promises := make(chan *PResponse, len(n.q))
-	prepareRequest := Promise{
-		SlotN:    slotNum,
-		Sequence: Seq{sequence, n.address},
-	}
-	for _, replica := range n.assemble() {
-		chat(1, replica)
-		go func(address string) {
-			response := new(PResponse)
-			if err := n.call(address, "Node.Prepare", prepareRequest, response); err != nil {
-				chat(2, fmt.Sprintf("Error in calling Prepare on replica %s", address))
-				promises <- nil
-			} else {
-				promises <- response
-				log.Println(response.Promised)
-			}
-		}(replica)
-	}
-
-	count = 0
-	highest = 0
-	votedNo := 0
-
-	for _ = range n.q {
-		response := <-promises
-		switch {
-		case response == nil:
-			votedNo++
-			chat(1, "Empty response, counting it as no")
-		case response.Okay:
-			count++
-			highest++
-			if response.Promised.SeqN.N > 0 {
-				chat(1, fmt.Sprintf("[%d] ---> \"yes\" on command   {%s}  ", slotNum, command))
-			} else {
-				chat(1, fmt.Sprintf("[%d] ---> \"yes\" no value", slotNum))
-			}
-
-			// see if a response is a higher sequence number and record its value
-			if response.Promised.SeqN.Cmp(command.SeqN) {
-				command = response.Promised
-			}
-			//record the highest sequence number. This is for when we need to execute this again
-			if response.Promised.SeqN.N > highest {
-				highest = response.Promised.SeqN.N
-			}
-		case !response.Okay:
-			votedNo++
-			if response.Promised.SeqN.N > highest {
-				highest = response.Promised.SeqN.N
-			}
-		}
-	}
-
-	return count, highest, command
-}*/
-
 func (elt Node) Propose(in Request, reply *PResponse) error {
-
-	tempreply := *reply
+	//tempreply := *reply
 	promisedValues := in.Promise
 	requestedCmd := promisedValues.Command
 	requestedSeq := in.Promise.Command.SeqN
@@ -260,9 +201,10 @@ func (elt Node) Propose(in Request, reply *PResponse) error {
 		slotToWork.N.N = 1
 	}
 	//set our newly created slot to have the inputed commands and sequence
-	slotToWork.Command = requestedCmd
+	slotToWork.Data = requestedCmd
 	slotToWork.Data.SeqN = slotToWork.N
 
+breakCount:
 	for {
 		// pick first undecided
 		for index, value := range elt.slot {
@@ -272,95 +214,201 @@ func (elt Node) Propose(in Request, reply *PResponse) error {
 				break
 			}
 		}
-		acceptance.Slot = pSlot
+		accept.Slot = slotToWork
 
-		logM("*     Propose:  Round: " + strconv.Itoa(round))
-		logM("*               Slot: " + strconv.Itoa(pSlot.N))
-		logM("*               N: " + strconv.Itoa(pSlot.Sequence.N))
+		chat(3, fmt.Sprintf("Propose: round %d\n     Slot: %d \n     Sequence: %d\n", count, slotToWork.Position, slotToWork.N.N))
 
-		// Send a Prepare message out to the entire cell (using a go routine per replica)
-		response := make(chan Response, len(self.Friends))
-		for _, v := range self.Friends {
-			go func(v string, slot Slot, sequence Sequence, response chan Response) {
-				req := Request{Address: self.Address, Prepare: Prepare{Slot: slot, Seq: sequence}}
-				var resp Response
-				err := call(v, "Prepare", req, &resp)
-				if err != nil {
-					failure("Prepare (from Propose)")
+		// prepare to the entire quorum
+		responses := make(chan PResponse, len(elt.q))
+		for _, address := range elt.q {
+			go func(address string, slotToWork Slot, sequence Seq, responses chan PResponse) {
+				p := Promise{
+					Slot:     slotToWork,
+					Sequence: sequence,
+				}
+				message := Request{
+					Address: elt.address,
+					Promise: p,
+				}
+
+				pReply := PResponse{}
+
+				if err := elt.call(address, "Node.Prepare", message, &pReply); err != nil {
+					chat(3, fmt.Sprintf("Connection failure during prepare ----> [%s]\n", address))
 					return
 				}
-				// Send the response over a channel, we can assume that a majority WILL respond
-				response <- resp
+				// put reponses into the channel
+				responses <- pReply
 
-			}(v, pSlot, pSlot.Sequence, response)
+			}(address, slotToWork, slotToWork.N, responses)
 		}
-		// Get responses from go routines
-		numYes := 0
-		numNo := 0
-		highestN := 0
-		var highestCommand Command
-		for numVotes := 0; numVotes < len(self.Friends); numVotes++ {
+		// count responses
+		repliedYes := 0
+		repliedNo := 0
+		highestSeqN := 0
+		//blank command in case anyone replies with a higher one.
+		mostRecentCommand := Command{}
+
+		for _ = range elt.q {
 			// pull from the channel response
-			prepareResponse := <-response
-			if prepareResponse.Okay {
-				numYes++
+			response := <-responses
+			responseSeqN := response.Promised.N
+			responseCommand := response.Command
+			//count the replies
+			if response.Okay {
+				repliedYes++
 			} else {
-				numNo++
+				repliedNo++
 			}
 
-			// make note of the highest n value that any replica returns to you
-			if prepareResponse.Promised.N > highestN {
-				highestN = prepareResponse.Promised.N
+			// do they have a higher sequence number than me?
+			if responseSeqN > highestSeqN {
+				highestSeqN = responseSeqN
 			}
-			// track the highest-sequenced command that has already been accepted by one or more of the replicas
-			if prepareResponse.Command.Sequence.N > highestCommand.Sequence.N {
-				highestCommand = prepareResponse.Command
+			// does a command have a higher sequence number than the previous champion?
+			if responseCommand.SeqN.Cmp(mostRecentCommand.SeqN) > 0 {
+				mostRecentCommand = responseCommand
 			}
 
-			// If I have a majority
-			if numYes >= majority(len(self.Friends)) || numNo >= majority(len(self.Friends)) {
+			// optimize by leaving if this is a majority
+			if elt.majority(repliedYes, repliedNo) != 0 {
 				break
 			}
 		}
 
-		// If I have a majority
-		if numYes >= majority(len(self.Friends)) {
-			// select your value
-			// If none of the replicas that voted for you included a value, you can pick your own.
-			acceptance.V = pSlot.Command
+		// If this was voted yes
+		if elt.majority(repliedYes, repliedNo) == 1 {
 
-			// In either case, you should associate the value you are about to send out for acceptance with your promised n
-			acceptance.N = pSlot.Sequence
+			// did anyone reply with a value? pick your own if no
+
+			accept.Data = slotToWork.Data
+
+			// Set sequence to the seq of the command
+			accept.Sequence = slotToWork.N
 
 			// If one or more of those replicas that voted for you have already ACCEPTED a value,
 			// you should pick the highest-numbered value from among them, i.e. the one that was accepted with the highest n value.
 
-			if highestCommand.Tag > 0 && highestCommand.Tag != args.Command.Tag {
-				acceptance.V = highestCommand
-				acceptance.Slot.Command = highestCommand
+			if mostRecentCommand.Id != "" && mostRecentCommand.Id != promisedValues.Command.Id {
+				accept.Data = mostRecentCommand
+				accept.Slot.Data = mostRecentCommand
 
-				req.Accept = acceptance
-				call(self.Address, "Accept", req, resp)
+				in.Accept = accept
+				elt.call(elt.address, "Node.Accept", in, &reply)
 			} else {
-				break rounds
+				break breakCount
 			}
 		}
-		// No Majority? Generate a larger n for the next round
-		pSlot.Sequence.N = highestN + 1
+		// higher seq because we failed
+		slotToWork.N.N = highestSeqN + 1
 
 		// To pause, pick a random amount of time between, say, 5ms and 10ms. If you fail again, pick a random sleep time between 10ms and 20ms
-		duration := float64(5 * round)
-		offset := float64(duration) * rand.Float64()
-		time.Sleep(time.Millisecond * time.Duration(duration+offset))
-		round++
+
+		count++
 	}
 
-	req.Accept = acceptance
-	call(self.Address, "Accept", req, resp)
+	in.Accept = accept
+	elt.call(elt.address, "Node.Accept", in, &reply)
+
+	return nil
+}
+func (elt Node) PAccept(in Request, reply *PResponse) error {
+	//args
+	requestedValues := in.Accept
+	//aSlot
+	slotToWork := requestedValues.Slot
+	//aV
+	requestedCmd := requestedValues.Data
+	//aN
+	requestedSeq := requestedValues.Sequence
+
+	// ask everyone to accept
+	//wow, this looks familiar
+	responses := make(chan PResponse, len(elt.q))
+	for _, v := range self.Friends {
+		go func(v string, slot Slot, sequence Sequence, command Command, response chan Response) {
+			req := Request{Address: self.Address, Accepted: Accepted{Slot: slot, Seq: sequence, Command: command}}
+			var resp Response
+			err := call(v, "Accepted", req, &resp)
+			if err != nil {
+				failure("Accepted (from Accept)")
+				return
+			}
+			// Send the response over a channel, we can assume that a majority WILL respond
+			response <- resp
+		}(v, aSlot, aN, aV, response)
+	}
+
+	// Get responses from go routines
+	numYes := 0
+	numNo := 0
+	highestN := 0
+	for numVotes := 0; numVotes < len(self.Friends); numVotes++ {
+		// pull from the channel response
+		prepareResponse := <-response
+		//resp{Command, Promised, Okay}
+		if prepareResponse.Okay {
+			numYes++
+		} else {
+			numNo++
+		}
+
+		// make note of the highest n value that any replica returns to you
+		if prepareResponse.Promised.N > highestN {
+			highestN = prepareResponse.Promised.N
+		}
+
+		// If I have a majority
+		if numYes >= majority(len(self.Friends)) || numNo >= majority(len(self.Friends)) {
+			break
+		}
+	}
+
+	if numYes >= majority(len(self.Friends)) {
+		logM("***             Received majority")
+		for _, v := range self.Friends {
+			go func(v string, slot Slot, command Command) {
+				req := Request{Address: self.Address, Decide: Decide{Slot: slot, Value: command}}
+				var resp Response
+				err := call(v, "Decide", req, &resp)
+				if err != nil {
+					failure("Decide (from Accept)")
+					return
+				}
+			}(v, aSlot, aV)
+		}
+
+		return nil
+	}
+
+	logM("***     Accept: NO majority")
+	aV.Sequence.N = highestN + 1
+
+	// To pause, pick a random amount of time between, say, 5ms and 10ms. If you fail again, pick a random sleep time between 10ms and 20ms
+	duration := float64(5)
+	offset := float64(duration) * rand.Float64()
+	time.Sleep(time.Millisecond * time.Duration(duration+offset))
+
+	req1 := Request{Address: self.Address, Propose: Propose{Command: aV}}
+	var resp1 Response
+	err := call(self.Address, "Propose", req1, &resp1)
+	if err != nil {
+		failure("Propose")
+		return err
+	}
 
 	return nil
 }
 
+//
+
+//
+
+// main area
+
+//
+
+//
 func main() {
 	addrin := os.Args
 	var node = &Node{
