@@ -17,7 +17,7 @@ import (
 
 const SIZE = 100
 
-var CHATTY int = 3
+var CHATTY int = 0
 
 type Seq struct {
 	N       int
@@ -92,8 +92,8 @@ func (n Node) Accept(in Request, reply *PResponse) error {
 	lastLocalSeq := slot.N
 	commandedSeqNum := in.Accepted.Sequence
 	//accepted := slot.Accepted
-
-	if lastLocalSeq.Cmp(commandedSeqNum) == 0 {
+	chat(1, fmt.Sprintf("I have been asked to accept Seq: [%d]\nCompare: [%d]\n", commandedSeqNum.N, lastLocalSeq.Cmp(commandedSeqNum)))
+	if commandedSeqNum.Cmp(lastLocalSeq) < 1 {
 		/*slot.Accepted = true
 		slot.Decided = true
 		slot.N.N = commandedSeqNum
@@ -102,6 +102,7 @@ func (n Node) Accept(in Request, reply *PResponse) error {
 		n.placeInSlot(slot, commandedSeqNum)*/
 		//set the return, since it was successful we do not need to
 		//send back the command
+		chat(1, "I can accept\n")
 		tempreply.Okay = true
 		tempreply.Promised = lastLocalSeq
 		n.recentSlot = in.Accepted.Slot
@@ -109,6 +110,7 @@ func (n Node) Accept(in Request, reply *PResponse) error {
 		//the value was not placed
 		//inform the sender and return the
 		//command that we have in this slot
+		chat(1, "I can NOT accept\n")
 		tempreply.Okay = false
 		tempreply.Promised = n.recentSlot.N
 	}
@@ -117,25 +119,27 @@ func (n Node) Accept(in Request, reply *PResponse) error {
 }
 
 //just gathering majority quorum, does not need the data, just a slot and sequence number
-func (n Node) Prepare(proposal Promise, reply *PResponse) error {
+func (n Node) Prepare(proposal Request, reply *PResponse) error {
 	tempreply := *reply
-	slotToWork := n.getSlot(proposal.Slot.Position)
+	slotToWork := n.getSlot(proposal.Promise.Slot.Position)
 	currentSeq := slotToWork.N
-	proposedSeq := proposal.Sequence
+	proposedSeq := proposal.Promise.Sequence
 
 	//was this slot decided or did I already promise a higher sequence number?
 	// TODO: make a tie breaker. Checks greater than. If they are equal then use IP as tie-breaker
 	// ^^^^^ finished. see func seq.cmp
+	chat(1, fmt.Sprintf("Current = [%d]\nProposed = [%d]\n", currentSeq.N, proposedSeq.N))
 	if currentSeq.Cmp(proposedSeq) > -1 {
 		tempreply.Okay = false
-		chat(1, fmt.Sprintf("[%d]   already promised to ----> [%s]", proposal.Slot.Position, slotToWork.N.Address))
+		chat(1, fmt.Sprintf("[%d] already promised to ----> [%s]", proposal.Promise.Slot.Position, slotToWork.N.Address))
 		tempreply.Promised = proposedSeq
 	} else {
+		chat(1, fmt.Sprintf("Successful Prepare round: SeqN[%d]", proposedSeq.N))
 		//slotToWork.Accepted = true
 		slotToWork.N = proposedSeq
 		//place the new sequence number and
 		//accepted into a slot.
-		n.placeInSlot(slotToWork, proposal.Slot.Position)
+		n.placeInSlot(slotToWork, proposal.Promise.Slot.Position)
 
 		tempreply.Okay = true
 		tempreply.Promised = proposedSeq
@@ -152,7 +156,7 @@ func (elt Node) Decide(in Request, reply *bool) error {
 
 	reqSlotPosition := in.Decision.Slot.Position
 	localSlot := elt.getSlot(reqSlotPosition)
-
+	chat(1, fmt.Sprintf("I have been asked to decide on: [%d]\nDecided locally?: [%t]\n", in.Decision.Slot.N.String(), localSlot.Decided))
 	if localSlot.Decided && !localSlot.Data.SameCommand(in.Command) {
 		chat(2, fmt.Sprintf("Failed in decide:  [%d] already has ------> [%s] ", in.Decision.Slot.Position, localSlot.Data.Print()))
 		return nil
@@ -172,7 +176,7 @@ func (elt Node) Decide(in Request, reply *bool) error {
 	cmd := in.Decision.Value
 	in.Decision.Slot.Decided = true
 	elt.placeInSlot(in.Decision.Slot, in.Decision.Slot.Position)
-
+	chat(1, fmt.Sprintf("Placed Slot#[%d] ---> Seq#[%d]", elt.getSlot(in.Decision.Slot.Position).Position, elt.getSlot(in.Decision.Slot.Position).N.N))
 	//wait if everyone is not decided.
 	//I got help with the alldecided function
 	for !allDecided(elt.slot, in.Decision.Slot.Position) {
@@ -197,6 +201,7 @@ func (elt Node) Propose(in Request, reply *PResponse) error {
 
 	//is this the first one? Offset it then give it our own address
 	if slotToWork.N.N == 0 {
+		chat(1, "Setting Slot to 1 in Propose")
 		slotToWork.N.Address = elt.address
 		slotToWork.N.N = 1
 	}
@@ -206,11 +211,14 @@ func (elt Node) Propose(in Request, reply *PResponse) error {
 
 breakCount:
 	for {
+		time.Sleep(time.Second * 2)
 		// pick first undecided
 		for index, value := range elt.slot {
+			chat(1, fmt.Sprintf("Ranging Over slots: [%d] decided --> [%t]", index, value.Decided))
 			if !value.Decided {
 				//this will be where we propse to put this.
 				slotToWork.Position = index
+				chat(1, fmt.Sprintf("Picked Slot: %d\n", value.Position))
 				break
 			}
 		}
@@ -221,9 +229,10 @@ breakCount:
 		// prepare to the entire quorum
 		responses := make(chan PResponse, len(elt.q))
 		for _, address := range elt.q {
-			go func(address string, slotToWork Slot, sequence Seq, responses chan PResponse) {
+			chat(1, fmt.Sprintf("Running prepare on [%s]\n", address))
+			go func(address string, sToWork Slot, sequence Seq, responses chan PResponse) {
 				p := Promise{
-					Slot:     slotToWork,
+					Slot:     sToWork,
 					Sequence: sequence,
 				}
 				message := Request{
@@ -235,13 +244,13 @@ breakCount:
 
 				if err := elt.call(address, "Node.Prepare", message, &pReply); err != nil {
 					chat(3, fmt.Sprintf("Connection failure during prepare ----> [%s]\n", address))
-					return
 				}
 				// put reponses into the channel
 				responses <- pReply
 
 			}(address, slotToWork, slotToWork.N, responses)
 		}
+		chat(1, "Count responses")
 		// count responses
 		repliedYes := 0
 		repliedNo := 0
@@ -254,6 +263,7 @@ breakCount:
 			response := <-responses
 			responseSeqN := response.Promised.N
 			responseCommand := response.Command
+			chat(1, fmt.Sprintf("Response from node.prepare was [%t]\n", response.Okay))
 			//count the replies
 			if response.Okay {
 				repliedYes++
@@ -300,6 +310,7 @@ breakCount:
 			}
 		}
 		// higher seq because we failed
+		chat(1, fmt.Sprintf("Incrementing sequence in propose: [%d]\n", slotToWork.N.N))
 		slotToWork.N.N = highestSeqN + 1
 
 		// To pause, pick a random amount of time between, say, 5ms and 10ms. If you fail again, pick a random sleep time between 10ms and 20ms
@@ -308,7 +319,7 @@ breakCount:
 	}
 
 	in.Accept = accept
-	elt.call(elt.address, "Node.Accept", in, &reply)
+	elt.call(elt.address, "Node.PAccept", in, &reply)
 
 	return nil
 }
@@ -325,75 +336,92 @@ func (elt Node) PAccept(in Request, reply *PResponse) error {
 	// ask everyone to accept
 	//wow, this looks familiar
 	responses := make(chan PResponse, len(elt.q))
-	for _, v := range self.Friends {
-		go func(v string, slot Slot, sequence Sequence, command Command, response chan Response) {
-			req := Request{Address: self.Address, Accepted: Accepted{Slot: slot, Seq: sequence, Command: command}}
-			var resp Response
-			err := call(v, "Accepted", req, &resp)
-			if err != nil {
-				failure("Accepted (from Accept)")
+	for _, address := range elt.q {
+		go func(address string, slotToWork Slot, sequence Seq, command Command, responses chan PResponse) {
+			a := Accept{
+				Slot:     slotToWork,
+				Sequence: sequence,
+				Data:     command,
+			}
+			message := Request{
+				Address:  elt.address,
+				Accepted: a,
+			}
+			pReply := PResponse{}
+
+			if err := elt.call(address, "Node.Accept", message, &pReply); err != nil {
+				chat(2, fmt.Sprintf("Connection failure in PAccept ---->   [%s]\n", address))
 				return
 			}
 			// Send the response over a channel, we can assume that a majority WILL respond
-			response <- resp
-		}(v, aSlot, aN, aV, response)
+			responses <- pReply
+		}(address, slotToWork, requestedSeq, requestedCmd, responses)
 	}
 
 	// Get responses from go routines
-	numYes := 0
-	numNo := 0
-	highestN := 0
-	for numVotes := 0; numVotes < len(self.Friends); numVotes++ {
+	repliedYes := 0
+	repliedNo := 0
+	highestSeqN := 0
+	for _ = range elt.q {
 		// pull from the channel response
-		prepareResponse := <-response
+		tempResponse := <-responses
+		responseSeqN := tempResponse.Promised.N
 		//resp{Command, Promised, Okay}
-		if prepareResponse.Okay {
-			numYes++
+		if tempResponse.Okay {
+			repliedYes++
 		} else {
-			numNo++
+			repliedNo++
 		}
 
 		// make note of the highest n value that any replica returns to you
-		if prepareResponse.Promised.N > highestN {
-			highestN = prepareResponse.Promised.N
+		if responseSeqN > highestSeqN {
+			highestSeqN = responseSeqN
 		}
 
 		// If I have a majority
-		if numYes >= majority(len(self.Friends)) || numNo >= majority(len(self.Friends)) {
+		if elt.majority(repliedYes, repliedNo) != 0 {
 			break
 		}
 	}
 
-	if numYes >= majority(len(self.Friends)) {
-		logM("***             Received majority")
-		for _, v := range self.Friends {
-			go func(v string, slot Slot, command Command) {
-				req := Request{Address: self.Address, Decide: Decide{Slot: slot, Value: command}}
-				var resp Response
-				err := call(v, "Decide", req, &resp)
-				if err != nil {
-					failure("Decide (from Accept)")
+	if elt.majority(repliedYes, repliedNo) == 1 {
+		chat(2, "Majority in PAccept")
+		for _, address := range elt.q {
+			go func(address string, slotToWork Slot, command Command) {
+				giveEmTheD := Decision{
+					Slot:  slotToWork,
+					Value: command,
+				}
+				message := Request{
+					Address:  elt.address,
+					Decision: giveEmTheD,
+				}
+				pReply := PResponse{}
+
+				if err := elt.call(address, "Node.Decide", message, &pReply); err != nil {
+					chat(2, fmt.Sprintf("Connection failure in PAccept calling Decide --->  [%s]\n", address))
 					return
 				}
-			}(v, aSlot, aV)
+			}(address, slotToWork, requestedCmd)
 		}
 
 		return nil
 	}
 
-	logM("***     Accept: NO majority")
-	aV.Sequence.N = highestN + 1
+	chat(2, "No majority in PAccept")
+	requestedCmd.SeqN.N = highestSeqN + 1
 
-	// To pause, pick a random amount of time between, say, 5ms and 10ms. If you fail again, pick a random sleep time between 10ms and 20ms
-	duration := float64(5)
-	offset := float64(duration) * rand.Float64()
-	time.Sleep(time.Millisecond * time.Duration(duration+offset))
+	p := Promise{
+		Command: requestedCmd,
+	}
+	newMessage := Request{
+		Address: elt.address,
+		Promise: p,
+	}
+	newPReply := PResponse{}
 
-	req1 := Request{Address: self.Address, Propose: Propose{Command: aV}}
-	var resp1 Response
-	err := call(self.Address, "Propose", req1, &resp1)
-	if err != nil {
-		failure("Propose")
+	if err := elt.call(elt.address, "Node.Propose", newMessage, &newPReply); err != nil {
+		chat(2, "Failed to connect to myself in PAccept calling Propose")
 		return err
 	}
 
@@ -414,8 +442,9 @@ func main() {
 	var node = &Node{
 		address:  "",
 		q:        make([]string, 5),
-		slot:     make(map[int]Slot),
+		slot:     make(map[int]Slot, 50),
 		database: make(map[string]string),
+		Acks:     make(map[string]chan string),
 	}
 	if len(addrin) != 6 {
 		for i := 0; i < 5; i++ {
@@ -430,7 +459,8 @@ func main() {
 	node.create()
 	m := map[string]func(string) error{
 		"help": node.help,
-		"put":  node.parseTest,
+		"put":  node.put,
+		"ping": node.ping,
 		//"putrandom": node.putRandom,
 		//"get":    node.getRequest,
 		//"delete": node.deleteRequest,

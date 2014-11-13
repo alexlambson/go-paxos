@@ -29,8 +29,16 @@ func (n *Node) help(line string) error {
 }
 func (n *Node) dump(_ string) error {
 	log.Printf("Self:       	%s\n", n.address)
-	for q, value := range n.q {
+	/*for q, value := range n.q {
 		log.Printf("Quorum member %d:    %s \n", q, value)
+	}*/
+	fmt.Println("Database:    ")
+	for key, value := range n.database {
+		fmt.Printf("***   [%s] ---->  [%s]\n", key, value)
+	}
+	//log.Println(n.slot)
+	for _, value := range n.slot {
+		fmt.Sprintf("Position: [%d] \nSequence: [%s] \nOkay: [%s] \nCommand: [%s] \n", value.Position, value.N, value.Decided, value.Data)
 	}
 	return nil
 }
@@ -91,7 +99,8 @@ func (n *Node) putRandom(line string) error {
 		return err
 	}
 	for i := 0; i < num; i++ {
-		key := randString(5)
+		//switched keys to be numeric to show db consistency
+		key := strconv.Itoa(i)
 		value := randString(5)
 		line = key + " " + value
 		//n.putRequest(line)
@@ -148,7 +157,7 @@ func (n Node) testpa(_ string) error {
 
 	/*for i := 0; i < 10; i++ {
 
-																																																}*/
+																																																																									}*/
 	t := n.assemble()
 	for i := 0; i < len(t); i++ {
 		log.Println(t[i])
@@ -188,12 +197,9 @@ func (n Node) getSlot(slotN int) Slot {
 		return Slot{}
 	}
 }
-func (n Node) Ping(_ string, reply *bool) error {
-	*reply = true
-	return nil
-}
 func (n Node) placeInSlot(elt Slot, num int) bool {
 	//num is the index of where to place the slot
+	chat(1, fmt.Sprintf("Placing Slot: [%d] ---> [%t]\n", num, elt.Decided))
 	n.slot[num] = elt
 	return true
 }
@@ -221,7 +227,7 @@ func (elt Seq) Cmp(other Seq) int {
 	myAddress := elt.Address
 	otherAddress := other.Address
 
-	chat(1, fmt.Sprintf("Comparing %s:%s and %s:%s", myNum, myAddress, otherNum, otherAddress))
+	//chat(1, fmt.Sprintf("Comparing %d:%s and %d:%s", myNum, myAddress, otherNum, otherAddress))
 
 	//-1 means less than, 0 means equal, 1 means greater than
 
@@ -288,12 +294,40 @@ func parseInput(line string) (returnC Command, err error) {
 
 	return returnC, err
 }
-func (n Node) parseTest(line string) error {
+func (n Node) put(line string) error {
 	line = "put " + line
-	log.Println(line)
+
 	nope, err := parseInput(line)
-	log.Println(nope.Type, nope.Value, nope.Id, nope.Key, err)
-	return err
+	if err != nil {
+		log.Println("cannot put:", err)
+		return nil
+	}
+	n.executePaxos(nope)
+	return nil
+}
+func (elt Node) executePaxos(cmd Command) {
+
+	responseChan := make(chan string, 1)
+
+	// Create the listen for response channel
+	elt.Acks[cmd.Id] = responseChan
+
+	pp := Promise{
+		Command: cmd,
+	}
+	message := Request{
+		Address: elt.address,
+		Promise: pp,
+	}
+	pReply := PResponse{}
+
+	if err := elt.call(elt.address, "Node.Propose", message, &pReply); err != nil {
+		chat(3, "Somehow managed to fail during connecting to myself.\n")
+		return
+	}
+	go func() {
+		chat(2, fmt.Sprintf("DONE: [%s]\n", <-elt.Acks[cmd.Id]))
+	}()
 }
 func (elt Command) SameID(other Command) bool {
 	// Do the commands conflict?
@@ -338,4 +372,20 @@ func (elt Node) majority(yes int, no int) int {
 		return -1
 	}
 	return 0
+}
+func (elt Node) Ping(line string, reply *string) error {
+	*reply = fmt.Sprintf("[%s] ---> Signing in", elt.address)
+	log.Println(*reply)
+	return nil
+}
+func (elt Node) ping(line string) error {
+	for _, address := range elt.q {
+		reply := ""
+		if err := elt.call(address, "Node.Ping", line, &reply); err != nil {
+			log.Println("Ping failed:", address)
+			continue
+		}
+		log.Println(reply)
+	}
+	return nil
 }
