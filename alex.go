@@ -442,7 +442,7 @@ func main() {
 	var node = &Node{
 		address:  "",
 		q:        make([]string, 5),
-		slot:     make(map[int]Slot, 50),
+		slot:     make(map[int]Slot),
 		database: make(map[string]string),
 		Acks:     make(map[string]chan string),
 	}
