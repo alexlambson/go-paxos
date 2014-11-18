@@ -10,14 +10,14 @@ import (
 	//"net/http"
 	//"net/rpc"
 	"os"
-	"strconv"
+	//"strconv"
 	"strings"
 	"time"
 )
 
 const SIZE = 100
 
-var CHATTY int = 0
+var CHATTY int = 2
 
 type Seq struct {
 	N       int
@@ -40,7 +40,7 @@ type Slot struct {
 type Node struct {
 	address    string
 	q          []string //quorum
-	slot       map[int]Slot
+	slot       []Slot
 	database   map[string]string
 	recentSlot Slot
 	Acks       map[string]chan string
@@ -128,11 +128,12 @@ func (n Node) Prepare(proposal Request, reply *PResponse) error {
 	//was this slot decided or did I already promise a higher sequence number?
 	// TODO: make a tie breaker. Checks greater than. If they are equal then use IP as tie-breaker
 	// ^^^^^ finished. see func seq.cmp
-	chat(1, fmt.Sprintf("Current = [%d]\nProposed = [%d]\n", currentSeq.N, proposedSeq.N))
+	chat(1, fmt.Sprintf("Prepare Current Seq = [%d]\nProposed = [%d]\n", currentSeq.N, proposedSeq.N))
 	if currentSeq.Cmp(proposedSeq) > -1 {
 		tempreply.Okay = false
 		chat(1, fmt.Sprintf("[%d] already promised to ----> [%s]", proposal.Promise.Slot.Position, slotToWork.N.Address))
 		tempreply.Promised = proposedSeq
+		tempreply.Command = slotToWork.Data
 	} else {
 		chat(1, fmt.Sprintf("Successful Prepare round: SeqN[%d]", proposedSeq.N))
 		//slotToWork.Accepted = true
@@ -156,21 +157,15 @@ func (elt Node) Decide(in Request, reply *bool) error {
 
 	reqSlotPosition := in.Decision.Slot.Position
 	localSlot := elt.getSlot(reqSlotPosition)
-	chat(1, fmt.Sprintf("I have been asked to decide on: [%d]\nDecided locally?: [%t]\n", in.Decision.Slot.N.String(), localSlot.Decided))
+	chat(1, fmt.Sprintf("I have been asked to decide on: [%d]\nSlot [%d] Decided already?: [%t]\n", in.Decision.Slot.N.N, reqSlotPosition, localSlot.Decided))
 	if localSlot.Decided && !localSlot.Data.SameCommand(in.Command) {
-		chat(2, fmt.Sprintf("Failed in decide:  [%d] already has ------> [%s] ", in.Decision.Slot.Position, localSlot.Data.Print()))
+		chat(2, fmt.Sprintf("\n    Failed in decide:  \n    [%d] already has ------> [%s] ", in.Decision.Slot.Position, localSlot.Data.Print()))
 		return nil
 	}
 	//quit if already decided
 	if localSlot.Decided {
-		chat(2, fmt.Sprintf("Failed in decide:  [%d] already has ------> %s ", in.Decision.Slot.Position, localSlot.Data.Print()))
+		chat(2, fmt.Sprintf("Failed in decide:  Slot [%d] from [%s] already decided ", in.Decision.Slot.Position, localSlot.N.Address))
 		return nil
-	}
-
-	if _, okay := elt.Acks[in.Decision.Value.Key]; okay {
-		//I got help with this section
-		// if found send the result across the channel, then remove the channel from the map and throw it away
-		elt.Acks[in.Decision.Value.Key] <- in.Decision.Value.Print()
 	}
 
 	cmd := in.Decision.Value
@@ -182,7 +177,14 @@ func (elt Node) Decide(in Request, reply *bool) error {
 	for !allDecided(elt.slot, in.Decision.Slot.Position) {
 		time.Sleep(time.Second)
 	}
-	elt.runCommand(cmd)
+	returnValue := elt.runCommand(cmd)
+
+	if _, okay := elt.Acks[in.Decision.Value.Id]; okay {
+		//I got help with this section
+		// if found send the result across the channel, then remove the channel from the map and throw it away
+		elt.Acks[in.Decision.Value.Id] <- returnValue
+	}
+
 	elt.currentSeq++
 
 	return nil
@@ -213,23 +215,25 @@ breakCount:
 	for {
 		time.Sleep(time.Second * 2)
 		// pick first undecided
-		for index, value := range elt.slot {
-			chat(1, fmt.Sprintf("Ranging Over slots: [%d] decided --> [%t]", index, value.Decided))
+		for i := 1; i < len(elt.slot); i++ {
+			index := i
+			value := elt.getSlot(index)
+			chat(0, fmt.Sprintf("Ranging Over slots: [%d] decided --> [%t]", index, value.Decided))
 			if !value.Decided {
 				//this will be where we propse to put this.
 				slotToWork.Position = index
-				chat(1, fmt.Sprintf("Picked Slot: %d\n", value.Position))
+				chat(1, fmt.Sprintf("Picked Slot: %d\n", slotToWork.Position))
 				break
 			}
 		}
 		accept.Slot = slotToWork
 
-		chat(3, fmt.Sprintf("Propose: round %d\n     Slot: %d \n     Sequence: %d\n", count, slotToWork.Position, slotToWork.N.N))
+		chat(3, fmt.Sprintf("\n     Propose: round %d\n     Slot: %d \n     Sequence: %d\n", count, accept.Slot.Position, accept.Slot.N.N))
 
 		// prepare to the entire quorum
 		responses := make(chan PResponse, len(elt.q))
 		for _, address := range elt.q {
-			chat(1, fmt.Sprintf("Running prepare on [%s]\n", address))
+			chat(0, fmt.Sprintf("Running prepare on [%s]\n", address))
 			go func(address string, sToWork Slot, sequence Seq, responses chan PResponse) {
 				p := Promise{
 					Slot:     sToWork,
@@ -243,14 +247,14 @@ breakCount:
 				pReply := PResponse{}
 
 				if err := elt.call(address, "Node.Prepare", message, &pReply); err != nil {
-					chat(3, fmt.Sprintf("Connection failure during prepare ----> [%s]\n", address))
+					chat(0, fmt.Sprintf("Connection failure during prepare ----> [%s]", address))
 				}
 				// put reponses into the channel
 				responses <- pReply
 
 			}(address, slotToWork, slotToWork.N, responses)
 		}
-		chat(1, "Count responses")
+		chat(1, "Count responses\n")
 		// count responses
 		repliedYes := 0
 		repliedNo := 0
@@ -263,7 +267,7 @@ breakCount:
 			response := <-responses
 			responseSeqN := response.Promised.N
 			responseCommand := response.Command
-			chat(1, fmt.Sprintf("Response from node.prepare was [%t]\n", response.Okay))
+			chat(1, fmt.Sprintf("Response from node.prepare was [%t]", response.Okay))
 			//count the replies
 			if response.Okay {
 				repliedYes++
@@ -277,6 +281,7 @@ breakCount:
 			}
 			// does a command have a higher sequence number than the previous champion?
 			if responseCommand.SeqN.Cmp(mostRecentCommand.SeqN) > 0 {
+				chat(1, fmt.Sprintf("Higher command recieved from : [ %s ]\nCommand: %t\n", responseCommand.SeqN.Address, responseCommand.Print()))
 				mostRecentCommand = responseCommand
 			}
 
@@ -287,10 +292,11 @@ breakCount:
 		}
 
 		// If this was voted yes
-		if elt.majority(repliedYes, repliedNo) == 1 {
+		if elt.majority(repliedYes, repliedNo) != 0 {
 
 			// did anyone reply with a value? pick your own if no
-
+			chat(1, "Majority achieved votes")
+			chat(1, mostRecentCommand.Print())
 			accept.Data = slotToWork.Data
 
 			// Set sequence to the seq of the command
@@ -300,12 +306,15 @@ breakCount:
 			// you should pick the highest-numbered value from among them, i.e. the one that was accepted with the highest n value.
 
 			if mostRecentCommand.Id != "" && mostRecentCommand.Id != promisedValues.Command.Id {
+				chat(2, fmt.Sprintf("\n     %s:\n     Already proposed %s", mostRecentCommand.SeqN.Address, mostRecentCommand.Print()))
 				accept.Data = mostRecentCommand
 				accept.Slot.Data = mostRecentCommand
+				accept.Sequence = mostRecentCommand.SeqN
 
 				in.Accept = accept
-				elt.call(elt.address, "Node.Accept", in, &reply)
+				elt.call(elt.address, "Node.PAccept", in, &reply)
 			} else {
+				chat(1, "Breaking at break count")
 				break breakCount
 			}
 		}
@@ -441,33 +450,34 @@ func main() {
 	addrin := os.Args
 	var node = &Node{
 		address:  "",
-		q:        make([]string, 5),
-		slot:     make(map[int]Slot),
+		q:        make([]string, 0),
+		slot:     make([]Slot, 100),
 		database: make(map[string]string),
 		Acks:     make(map[string]chan string),
 	}
-	if len(addrin) != 6 {
-		for i := 0; i < 5; i++ {
-			node.q[i] = appendLocalHost(":341" + strconv.Itoa(i))
-		}
-	} else {
-		for i := 0; i < 5; i++ {
-			node.q[i] = appendLocalHost(addrin[i+1])
+	/*tempSlot := Slot{}
+	tempSlot.Decided = true
+	tempSlot.Position = 0
+	node.placeInSlot(tempSlot, 0)
+	*/
+	for i := 1; i < len(addrin); i++ {
+		if appendLocalHost(addrin[i]) != "" {
+			node.q = Extend(node.q, appendLocalHost(addrin[i]))
 		}
 	}
 	node.address = node.q[0]
 	node.create()
 	m := map[string]func(string) error{
-		"help": node.help,
-		"put":  node.put,
-		"ping": node.ping,
-		//"putrandom": node.putRandom,
-		//"get":    node.getRequest,
-		//"delete": node.deleteRequest,
-		"chat":   node.chatLevel,
-		"dump":   node.dump,
-		"quit":   quit,
-		"testpa": node.testpa,
+		"help":      node.help,
+		"put":       node.put,
+		"ping":      node.ping,
+		"putrandom": node.putRandom,
+		"get":       node.get,
+		"delete":    node.nDelete,
+		"chat":      node.chatLevel,
+		"dump":      node.dump,
+		"quit":      quit,
+		"testpa":    node.testpa,
 	}
 	fmt.Println("Paxos Implementation by Alex and Colton")
 	fmt.Println("Listening on:	", node.address)

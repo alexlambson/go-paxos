@@ -29,17 +29,21 @@ func (n *Node) help(line string) error {
 }
 func (n *Node) dump(_ string) error {
 	log.Printf("Self:       	%s\n", n.address)
-	/*for q, value := range n.q {
-		log.Printf("Quorum member %d:    %s \n", q, value)
-	}*/
-	fmt.Println("Database:    ")
+	for q, value := range n.q {
+		chat(1, fmt.Sprintf("Quorum member %d:    %s \n", q, value))
+	}
+	fmt.Println("\nDatabase:    ")
 	for key, value := range n.database {
 		fmt.Printf("***   [%s] ---->  [%s]\n", key, value)
 	}
-	//log.Println(n.slot)
-	for _, value := range n.slot {
-		fmt.Sprintf("Position: [%d] \nSequence: [%s] \nOkay: [%s] \nCommand: [%s] \n", value.Position, value.N, value.Decided, value.Data)
+	fmt.Println()
+	for i := 0; i < len(n.slot); i++ {
+		value := n.getSlot(i)
+		if value.Decided {
+			chat(1, fmt.Sprintf("Position: [%d] \nSequence: [%d] \nOkay: [%t] \nCommand: [%s] \n", value.Position, value.N.N, value.Decided, value.Data.Print()))
+		}
 	}
+	//log.Println("\n", n.getSlot(0).Decided, len(n.slot))
 	return nil
 }
 func quit(_ string) error {
@@ -100,10 +104,10 @@ func (n *Node) putRandom(line string) error {
 	}
 	for i := 0; i < num; i++ {
 		//switched keys to be numeric to show db consistency
-		key := strconv.Itoa(i)
+		key := randString(5)
 		value := randString(5)
 		line = key + " " + value
-		//n.putRequest(line)
+		n.put(line)
 	}
 	return nil
 }
@@ -157,7 +161,7 @@ func (n Node) testpa(_ string) error {
 
 	/*for i := 0; i < 10; i++ {
 
-																																																																									}*/
+																																																																																																		}*/
 	t := n.assemble()
 	for i := 0; i < len(t); i++ {
 		log.Println(t[i])
@@ -191,11 +195,14 @@ func (n Node) assemble() []string {
 	return quorum
 }
 func (n Node) getSlot(slotN int) Slot {
-	if value, okay := n.slot[slotN]; okay {
-		return value
-	} else {
-		return Slot{}
-	}
+	return n.slot[slotN]
+	/*
+		if value := n.slot[slotN]{
+			return value
+		} else {
+			return Slot{}
+		}
+	*/
 }
 func (n Node) placeInSlot(elt Slot, num int) bool {
 	//num is the index of where to place the slot
@@ -254,19 +261,19 @@ func (elt Node) runCommand(com Command) string {
 	switch {
 	case commandType == "get":
 		if value, exists := elt.database[com.Key]; exists {
-			return value
+			return fmt.Sprintf("    Key: [%s]\n    Value: [%s]\n", com.Key, value)
 		} else {
 			return fmt.Sprintf("Data for: %s     does not exist\n", com.Key)
 		}
 	case commandType == "put":
 		elt.database[com.Key] = com.Value
-		return fmt.Sprintf("Put  [%s] -------->  [%s]\n", com.Key, com.Value)
+		return fmt.Sprintf("    Put  [%s] ----->  [%s]\n    COMPLETED!\n", com.Key, com.Value)
 	case commandType == "delete":
 		if value, exists := elt.database[com.Key]; exists {
 			delete(elt.database, com.Key)
-			return fmt.Sprintf("Deleted: [%s] ------> [%s]", com.Key, value)
+			return fmt.Sprintf("Deleted: [%s] -----> [%s]", com.Key, value)
 		} else {
-			return fmt.Sprintf("Data for: %s     does not exist\n", com.Key)
+			return fmt.Sprintf("Data for:  [%s]  does not exist\n", com.Key)
 		}
 	default:
 		return fmt.Sprintf("Command type   [%s]   not recognized\n", commandType)
@@ -297,12 +304,34 @@ func parseInput(line string) (returnC Command, err error) {
 func (n Node) put(line string) error {
 	line = "put " + line
 
-	nope, err := parseInput(line)
+	parsed, err := parseInput(line)
 	if err != nil {
 		log.Println("cannot put:", err)
 		return nil
 	}
-	n.executePaxos(nope)
+	n.executePaxos(parsed)
+	return nil
+}
+func (n Node) get(line string) error {
+	line = "get " + line
+
+	parsed, err := parseInput(line)
+	if err != nil {
+		log.Println("\n    cannot get:", err)
+		return nil
+	}
+	n.executePaxos(parsed)
+	return nil
+}
+func (n Node) nDelete(line string) error {
+	line = "delete " + line
+
+	parsed, err := parseInput(line)
+	if err != nil {
+		log.Println("\n    cannot delete:", err)
+		return nil
+	}
+	n.executePaxos(parsed)
 	return nil
 }
 func (elt Node) executePaxos(cmd Command) {
@@ -337,9 +366,9 @@ func (elt Command) SameCommand(other Command) bool {
 	return elt.Key == other.Key && elt.Type == other.Type && elt.Value == other.Value
 }
 func (elt Command) Print() string {
-	return fmt.Sprintf("[ %s , %s , %s ]", elt.Type, elt.Key, elt.Value)
+	return fmt.Sprintf("[ %s , %s , %s , Slot : %d , SeqN : %d]", elt.Type, elt.Key, elt.Value, elt.Slot, elt.SeqN.N)
 }
-func allDecided(slots map[int]Slot, n int) bool {
+func allDecided(slots []Slot, n int) bool {
 	//n is the slot number to stop at
 	if n == 1 {
 		return true
